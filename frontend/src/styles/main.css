@@ -1,0 +1,10 @@
+/* ============================================================
+   DECOSTORE — Main CSS Entry Point
+   Imports: Design System → Components
+   ============================================================ */
+
+/* Design System (tokens, reset, base utilities) */
+@import '../index.css';
+
+/* Component styles */
+@import './components.css';

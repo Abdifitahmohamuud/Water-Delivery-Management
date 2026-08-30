@@ -1,0 +1,524 @@
+// Water Delivery Management System - Prisma Schema
+// Complete database schema for water delivery ordering, driver management, and admin operations
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ===================== ENUMS =====================
+
+enum UserRole {
+  CUSTOMER
+  DRIVER
+  ADMIN
+}
+
+enum AccountStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum OTPType {
+  REGISTRATION
+  PASSWORD_RESET
+  PHONE_VERIFICATION
+}
+
+enum DriverAvailabilityStatus {
+  AVAILABLE
+  BUSY
+  OFFLINE
+}
+
+enum OrderStatus {
+  PENDING
+  ASSIGNED
+  ACCEPTED
+  REJECTED
+  IN_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  PARTIALLY_PAID
+  REFUNDED
+}
+
+enum PaymentOption {
+  PAY_NOW
+  PAY_LATER_MONTHLY
+}
+
+enum PaymentMethod {
+  CASH
+  MOBILE_MONEY
+  BANK
+  OTHER
+}
+
+enum NotificationType {
+  ORDER_CREATED
+  DRIVER_ASSIGNED
+  DRIVER_ACCEPTED
+  DELIVERY_STARTED
+  ORDER_DELIVERED
+  ORDER_CANCELLED
+  PAYMENT_CONFIRMED
+  SUPPORT_TICKET_CREATED
+  SUPPORT_TICKET_UPDATED
+  NEW_ASSIGNMENT
+  ASSIGNMENT_CANCELLED
+  ORDER_REASSIGNED
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum AuditActionType {
+  ORDER_CREATED
+  ORDER_ASSIGNED
+  ORDER_REASSIGNED
+  ORDER_CANCELLED
+  DRIVER_ACCEPTED
+  DRIVER_REJECTED
+  DELIVERY_STARTED
+  DELIVERY_COMPLETED
+  PRODUCT_CREATED
+  PRODUCT_UPDATED
+  PRODUCT_DEACTIVATED
+  DRIVER_ACTIVATED
+  DRIVER_DEACTIVATED
+  CUSTOMER_ACTIVATED
+  CUSTOMER_DEACTIVATED
+  PRICE_CHANGED
+  PASSWORD_CHANGED
+  ACCOUNT_SUSPENDED
+  PAYMENT_CONFIRMED
+}
+
+// ===================== USER MODELS =====================
+
+model User {
+  id              String        @id @default(uuid())
+  email           String        @unique
+  phone           String        @unique
+  password        String
+  fullName        String
+  role            UserRole
+  accountStatus   AccountStatus @default(PENDING_VERIFICATION)
+  profilePhotoUrl String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // One-to-One relationships to role-specific models
+  customer Customer?
+  driver   Driver?
+
+  // OTP and authentication
+  otps     OTP[]
+  sessions Session[]
+
+  // Notifications and audit
+  notifications Notification[]
+  auditLogs     AuditLog[]     @relation("AuditActor")
+
+  @@index([email])
+  @@index([phone])
+  @@index([role])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+model OTP {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         OTPType
+  code         String
+  codeHash     String // Hashed OTP for security
+  isUsed       Boolean   @default(false)
+  usedAt       DateTime?
+  attemptCount Int       @default(0)
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([expiresAt])
+}
+
+// ===================== CUSTOMER MODELS =====================
+
+model Customer {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Profile
+  alternatePhone String?
+  alternateEmail String?
+
+  // Addresses
+  savedAddresses SavedAddress[]
+
+  // Orders & Finance
+  orders              Order[]
+  paymentTransactions PaymentTransaction[]
+  supportTickets      SupportTicket[]      @relation("CustomerTickets")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model SavedAddress {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  label     String // "Home", "Office", "Shop", etc.
+  address   String // Full address text
+  latitude  Float?
+  longitude Float?
+  notes     String?
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+}
+
+// ===================== DRIVER MODELS =====================
+
+model Driver {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Driver specific
+  licenseNumber String?
+  licenseExpiry DateTime?
+  vehicleNumber String?
+  vehicleType   String?
+  vehicleColor  String?
+
+  // Availability
+  availabilityStatus DriverAvailabilityStatus @default(AVAILABLE)
+
+  // Orders
+  assignedOrders      Order[] @relation("AssignedDriver")
+  completedDeliveries Order[] @relation("DeliveredByDriver")
+
+  // Assignment history
+  assignmentHistory OrderAssignmentHistory[]
+
+  // Support and tickets
+  supportTickets SupportTicket[] @relation("DriverTickets")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([availabilityStatus])
+}
+
+// ===================== PRODUCT MODELS =====================
+
+model WaterProduct {
+  id           String  @id @default(uuid())
+  name         String // "20L Jerrycan", "10L Container", etc.
+  description  String?
+  unit         String // "liter", "container", "bottle", etc.
+  currentPrice Float
+  imageUrl     String?
+  isActive     Boolean @default(true)
+
+  // Price history
+  priceHistory ProductPriceHistory[]
+
+  // Orders using this product
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model ProductPriceHistory {
+  id            String       @id @default(uuid())
+  productId     String
+  product       WaterProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previousPrice Float
+  newPrice      Float
+  changedAt     DateTime     @default(now())
+  changedBy     String? // Admin ID who made the change
+
+  @@index([productId])
+}
+
+// ===================== ORDER MODELS =====================
+
+model Order {
+  id          String @id @default(uuid())
+  orderNumber String @unique // Human-readable: ORD-2026-000125
+
+  // Customer
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // Product and quantity
+  productId         String
+  product           WaterProduct @relation(fields: [productId], references: [id])
+  requestedQuantity Int // What customer requested
+  deliveredQuantity Int? // What was actually delivered
+
+  // Price snapshot (captured at order creation)
+  unitPrice   Float // Product price at order time
+  subtotal    Float // unitPrice × requestedQuantity
+  deliveryFee Float @default(0)
+  discount    Float @default(0)
+  totalPrice  Float
+
+  // Delivery location
+  deliveryAddress   String
+  deliveryLatitude  Float?
+  deliveryLongitude Float?
+  deliveryNotes     String?
+
+  // Driver assignment
+  assignedDriverId    String?
+  assignedDriver      Driver? @relation("AssignedDriver", fields: [assignedDriverId], references: [id])
+  deliveredByDriverId String?
+  deliveredByDriver   Driver? @relation("DeliveredByDriver", fields: [deliveredByDriverId], references: [id])
+
+  // Status and workflow
+  status OrderStatus @default(PENDING)
+
+  // Timestamps for workflow tracking
+  createdAt   DateTime  @default(now())
+  assignedAt  DateTime?
+  acceptedAt  DateTime?
+  rejectedAt  DateTime?
+  startedAt   DateTime?
+  deliveredAt DateTime?
+  cancelledAt DateTime?
+
+  // Rejection/Cancellation info
+  rejectionReason    String?
+  cancelledBy        String? // User ID who cancelled
+  cancellationReason String?
+
+  // Payment & Credit
+  paymentOption PaymentOption  @default(PAY_NOW)
+  paymentStatus PaymentStatus  @default(UNPAID)
+  paymentMethod PaymentMethod?
+  amountPaid    Float          @default(0)
+  balanceDue    Float          @default(0)
+
+  // Relationships
+  assignmentHistory OrderAssignmentHistory[]
+  payments          Payment[]
+  supportTickets    SupportTicket[]
+  auditLogs         AuditLog[]               @relation("OrderAudit")
+
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([assignedDriverId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([createdAt])
+}
+
+model OrderAssignmentHistory {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  driverId String
+  driver   Driver @relation(fields: [driverId], references: [id])
+
+  assignedBy      String? // Admin ID
+  assignedAt      DateTime  @default(now())
+  acceptedAt      DateTime?
+  rejectedAt      DateTime?
+  rejectionReason String?
+
+  status OrderStatus @default(ASSIGNED)
+
+  @@index([orderId])
+  @@index([driverId])
+}
+
+// ===================== PAYMENT MODELS =====================
+
+model Payment {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  amount Float
+  method PaymentMethod
+  status PaymentStatus @default(UNPAID)
+
+  paidAt DateTime?
+  paidBy String? // User ID who recorded payment
+
+  metadata      Json? // For storing payment gateway info
+  transactionId String? // External payment ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ===================== NOTIFICATION MODELS =====================
+
+model Notification {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String
+  orderId String? // Associated order if applicable
+
+  isRead Boolean   @default(false)
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// ===================== SUPPORT MODELS =====================
+
+model SupportTicket {
+  id           String @id @default(uuid())
+  ticketNumber String @unique
+
+  customerId String
+  customer   Customer @relation("CustomerTickets", fields: [customerId], references: [id], onDelete: Cascade)
+
+  driverId String?
+  driver   Driver? @relation("DriverTickets", fields: [driverId], references: [id])
+
+  orderId String? // Associated order if applicable
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  subject String
+  message String
+  status  SupportTicketStatus @default(OPEN)
+
+  resolution String?
+  resolvedBy String? // Admin ID
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([customerId])
+}
+
+// ===================== AUDIT LOG MODELS =====================
+
+model AuditLog {
+  id String @id @default(uuid())
+
+  actor     String?
+  actorUser User?   @relation("AuditActor", fields: [actor], references: [id])
+
+  action     AuditActionType
+  targetType String // "Order", "Driver", "Product", etc.
+  targetId   String // ID of affected resource
+  orderId    String?
+  order      Order?          @relation("OrderAudit", fields: [orderId], references: [id])
+
+  oldValue Json? // Previous value
+  newValue Json? // New value
+
+  metadata Json? // Additional context
+
+  createdAt DateTime @default(now())
+
+  @@index([actor])
+  @@index([action])
+  @@index([createdAt])
+  @@index([targetId])
+}
+
+// ===================== SYSTEM SETTINGS =====================
+
+model SystemSettings {
+  id             String  @id @default(uuid())
+  companyName    String  @default("Water Delivery Company")
+  companyPhone   String?
+  companyEmail   String?
+  companyAddress String?
+
+  currency           String @default("USD")
+  defaultDeliveryFee Float  @default(0)
+
+  // OTP settings
+  otpExpiration  Int @default(600) // seconds
+  maxOtpAttempts Int @default(3)
+
+  // Business hours
+  businessHoursEnabled Boolean @default(false)
+  businessHoursStart   String? @default("08:00")
+  businessHoursEnd     String? @default("17:00")
+
+  // Order cancellation policy
+  allowCustomerCancellation Boolean  @default(true)
+  cancellableOrderStatuses  String[] @default(["PENDING"]) // JSON array of statuses
+
+  updatedAt DateTime @updatedAt
+}
+
+model PaymentTransaction {
+  id               String        @id @default(uuid())
+  customerId       String
+  customer         Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  amount           Float
+  paymentMethod    PaymentMethod @default(CASH)
+  notes            String?
+  allocatedOrders  Json? // Array of allocated order breakdown
+  createdByAdminId String?
+  createdAt        DateTime      @default(now())
+
+  @@index([customerId])
+  @@index([createdAt])
+}
